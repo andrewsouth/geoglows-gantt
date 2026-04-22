@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEOGLOWS Project — Live Gantt Chart</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f0f2f5; color:#222; }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #1B3A5C, #2d6a9f);
+    color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap:10px;
+  }
+  .header-left { display:flex; flex-direction:column; }
+  .header-left h1 { font-size:1.35rem; font-weight:700; }
+  .header-left .subtitle { font-size:0.8rem; opacity:0.8; margin-top:2px; }
+  .header-right { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .live-badge { display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.15); padding:5px 12px; border-radius:20px; font-size:0.78rem; font-weight:600; }
+  .live-dot { width:9px; height:9px; border-radius:50%; background:#2ecc71; animation: pulse 1.5s infinite; }
+  .live-dot.offline { background:#e74c3c; animation:none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .stat-box { text-align:center; background:rgba(255,255,255,0.12); padding:6px 14px; border-radius:8px; }
+  .stat-box .val { font-size:1.1rem; font-weight:700; }
+  .stat-box .lbl { font-size:0.65rem; opacity:0.75; text-transform:uppercase; }
+
+  /* Controls */
+  .controls {
+    background:#fff; padding:10px 24px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    border-bottom:1px solid #ddd; box-shadow:0 1px 3px rgba(0,0,0,0.06);
+  }
+  .controls label { font-size:0.75rem; font-weight:600; color:#555; }
+  .controls select, .controls button {
+    font-size:0.78rem; padding:5px 10px; border:1px solid #ccc; border-radius:5px; background:#fff; cursor:pointer;
+  }
+  .controls button { background:#2d6a9f; color:#fff; border:none; font-weight:600; }
+  .controls button:hover { background:#1B3A5C; }
+  .legend { display:flex; gap:12px; margin-left:auto; align-items:center; font-size:0.72rem; }
+  .legend-item { display:flex; align-items:center; gap:4px; }
+  .legend-swatch { width:14px; height:10px; border-radius:2px; }
+
+  /* Chart wrapper */
+  .chart-wrapper {
+    display:flex; overflow:auto; max-height:calc(100vh - 160px); position:relative; margin:0; background:#fff;
+  }
+
+  /* Task Table */
+  .task-table {
+    border-collapse:collapse; position:sticky; left:0; z-index:20; background:#fff;
+    border-right:2px solid #1B3A5C; flex-shrink:0;
+  }
+  .task-table th {
+    position:sticky; top:0; z-index:25; background:#1B3A5C; color:#fff;
+    font-size:0.7rem; padding:6px 8px; text-align:left; white-space:nowrap; border-right:1px solid rgba(255,255,255,0.2);
+  }
+  .task-table td {
+    font-size:0.72rem; padding:3px 8px; border-bottom:1px solid #eee; white-space:nowrap; height:26px; vertical-align:middle;
+  }
+  .task-table tr:hover td { background:#eef5ff; }
+  .task-table tr.summary-row td { font-weight:700; background:#f7f9fc; }
+
+  /* Mini progress bar */
+  .mini-prog { width:48px; height:10px; background:#e0e0e0; border-radius:5px; display:inline-block; vertical-align:middle; overflow:hidden; }
+  .mini-prog-fill { height:100%; border-radius:5px; }
+
+  /* Gantt area */
+  .gantt-area { position:relative; flex-grow:1; }
+  .gantt-header {
+    position:sticky; top:0; z-index:15; height:26px; background:#1B3A5C; display:flex;
+  }
+  .gantt-header .month-label {
+    color:#fff; font-size:0.68rem; font-weight:600; text-align:center; border-right:1px solid rgba(255,255,255,0.25);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .gantt-body { position:relative; }
+  .gantt-row { position:relative; height:26px; border-bottom:1px solid #f0f0f0; }
+  .gantt-row:hover { background:#f8fbff; }
+
+  /* Grid lines */
+  .grid-line-week { position:absolute; top:0; bottom:0; width:1px; background:rgba(0,0,0,0.04); z-index:1; pointer-events:none; }
+  .grid-line-month { position:absolute; top:0; bottom:0; width:1px; background:rgba(0,0,0,0.12); z-index:1; pointer-events:none; }
+  .today-line { position:absolute; top:0; bottom:0; width:2px; background:#e74c3c; z-index:10; pointer-events:none; }
+
+  /* Bars */
+  .bar {
+    position:absolute; top:7px; height:12px; border-radius:3px; z-index:5; cursor:pointer; min-width:3px;
+    transition: filter 0.15s;
+  }
+  .bar:hover { filter:brightness(1.15); }
+  .bar-progress { position:absolute; top:0; left:0; height:100%; border-radius:3px; opacity:0.35; background:#fff; }
+  .bar-summary {
+    position:absolute; top:10px; height:6px; z-index:5; cursor:pointer; opacity:0.7;
+    background:#1B3A5C; min-width:6px;
+  }
+  .bar-summary::before, .bar-summary::after {
+    content:''; position:absolute; bottom:-4px; width:0; height:0;
+    border-left:4px solid transparent; border-right:4px solid transparent; border-top:4px solid #1B3A5C;
+  }
+  .bar-summary::before { left:0; }
+  .bar-summary::after { right:0; }
+
+  /* Caret */
+  .toggle-caret {
+    display:inline-block; cursor:pointer; font-size:0.65rem; margin-right:3px;
+    transition:transform 0.2s; user-select:none; color:#1B3A5C;
+  }
+  .toggle-caret.expanded { transform:rotate(90deg); }
+
+  /* Tooltip */
+  .tooltip {
+    position:fixed; z-index:100; background:#fff; border:1px solid #ccc; border-radius:8px;
+    padding:10px 14px; font-size:0.75rem; box-shadow:0 4px 16px rgba(0,0,0,0.15);
+    pointer-events:none; max-width:320px; display:none; line-height:1.5;
+  }
+  .tooltip .tt-title { font-weight:700; font-size:0.82rem; margin-bottom:4px; color:#1B3A5C; }
+  .tooltip .tt-row { display:flex; gap:6px; }
+  .tooltip .tt-label { font-weight:600; color:#555; min-width:75px; }
+
+  /* Print */
+  @media print {
+    .controls { display:none !important; }
+    .chart-wrapper { max-height:none !important; overflow:visible !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>GEOGLOWS Project &mdash; Live Gantt Chart</h1>
+    <div class="subtitle">BYU &bull; Live from Google Sheets</div>
+  </div>
+  <div class="header-right">
+    <div class="live-badge"><span class="live-dot" id="liveDot"></span><span id="liveText">LIVE</span></div>
+    <div class="stat-box"><div class="val" id="statTasks">0</div><div class="lbl">Tasks</div></div>
+    <div class="stat-box"><div class="val" id="statProgress">0</div><div class="lbl">In Progress</div></div>
+    <div class="stat-box"><div class="val" id="statComplete">0</div><div class="lbl">Complete</div></div>
+    <div class="stat-box"><div class="val" id="statRefresh">--</div><div class="lbl">Last Refresh</div></div>
+  </div>
+</div>
+
+<div class="controls">
+  <label>View:
+    <select id="viewFilter">
+      <option value="all">All Tasks</option>
+      <option value="level1">Level 1 Only</option>
+      <option value="incomplete">Incomplete Only</option>
+    </select>
+  </label>
+  <label>Lead:
+    <select id="leadFilter"><option value="">All</option></select>
+  </label>
+  <label>Auto-refresh:
+    <select id="refreshInterval">
+      <option value="0">Off</option>
+      <option value="60000">1 min</option>
+      <option value="300000" selected>5 min</option>
+      <option value="900000">15 min</option>
+    </select>
+  </label>
+  <button id="refreshBtn">Refresh Now</button>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="background:#2980b9"></span>In Progress</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#229954"></span>Complete</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#e74c3c"></span>Overdue</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#1B3A5C"></span>Summary</div>
+  </div>
+</div>
+
+<div class="chart-wrapper" id="chartWrapper">
+  <table class="task-table" id="taskTable">
+    <thead><tr><th>ID</th><th>Task Name</th><th>Lead</th><th>%</th></tr></thead>
+    <tbody id="taskBody"></tbody>
+  </table>
+  <div class="gantt-area" id="ganttArea">
+    <div class="gantt-header" id="ganttHeader"></div>
+    <div class="gantt-body" id="ganttBody"></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ── Constants ──
+const PROJECT_START = new Date(2026, 0, 5);
+const PROJECT_END   = new Date(2026, 11, 7);
+const DAY_PX = 2.8;
+const ROW_H  = 26;
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSVz2odYIBlaSlKgdDaMqVv8hSirQzhpAZOyrbNh-4w_FFrSOuuQVYn3ppeM0rMVCEaSuz1fGiiTxqv/pub?gid=1496632019&single=true&output=csv';
+const PROXY = 'https://api.allorigins.win/raw?url=';
+
+let allTasks = [];
+let collapsedIds = new Set();
+let refreshTimer = null;
+
+// ── Fallback Data ──
+const FALLBACK = [
+  {id:1,name:"Mission/Vision Alignment",level:1,start:"2026-01-05",finish:"2026-01-11",dur:1.0,pct:100,lead:"Jim",preds:"",status:"",notes:""},
+  {id:2,name:"Re-orient Roles and Responsibilties",level:1,start:"2026-01-12",finish:"2026-02-22",dur:6.0,pct:100,lead:"Jim",preds:"",status:"",notes:""},
+  {id:3,name:"Create GEOGLOWS Project Plan Framework",level:1,start:"2026-01-12",finish:"2026-03-01",dur:7.0,pct:100,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:4,name:"SERVIR Engagement",level:1,start:"2026-02-23",finish:"2026-04-26",dur:9.0,pct:25,lead:"Jim",preds:"",status:"",notes:""},
+  {id:6,name:"Identify student-level activities",level:1,start:"2026-02-23",finish:"2026-04-12",dur:7.0,pct:10,lead:"Jim",preds:"",status:"",notes:""},
+  {id:7,name:"Scope out impact-centric publications",level:1,start:"2026-02-23",finish:"2026-04-26",dur:9.0,pct:15,lead:"Riley",preds:"",status:"",notes:""},
+  {id:8,name:"Impact: Define, Demonstrate, Document",level:1,start:"2026-02-23",finish:"2026-05-03",dur:10.0,pct:32,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:9,name:"Create v1 Impact Road Map Draft",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:50,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:10,name:"Create User Impact Evaluation Protocol",level:2,start:"2026-02-23",finish:"2026-03-15",dur:3.0,pct:50,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:11,name:"Develop Strategy w/ BYU Comms",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:50,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:12,name:"Connect and outline plan w/ Ballard Center",level:2,start:"2026-02-23",finish:"2026-04-26",dur:9.0,pct:100,lead:"Andrew",preds:"2",status:"",notes:""},
+  {id:13,name:"Do Good. Better. Conference",level:2,start:"2026-03-12",finish:"2026-03-18",dur:1.0,pct:100,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:14,name:"Create impact-to-design feedback loop",level:2,start:"2026-04-13",finish:"2026-05-03",dur:3.0,pct:10,lead:"Andrew",preds:"85",status:"",notes:""},
+  {id:15,name:"Engagement: Update/Publish GEOGLOWS Stories",level:1,start:"2026-02-23",finish:"2026-09-20",dur:30.0,pct:2,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:16,name:"Review Impact Card Outline",level:2,start:"2026-02-23",finish:"2026-03-01",dur:1.0,pct:100,lead:"",preds:"2",status:"",notes:""},
+  {id:17,name:"Determine Publishing Location",level:2,start:"2026-03-02",finish:"2026-03-22",dur:3.0,pct:0,lead:"",preds:"16",status:"",notes:""},
+  {id:18,name:"Re - Write Past Case Drafts",level:2,start:"2026-03-02",finish:"2026-04-12",dur:6.0,pct:0,lead:"",preds:"16",status:"",notes:""},
+  {id:19,name:"Publish Impact Cards",level:2,start:"2026-03-23",finish:"2026-04-12",dur:3.0,pct:5,lead:"",preds:"17",status:"",notes:""},
+  {id:20,name:"New Stories",level:2,start:"2026-04-13",finish:"2026-09-06",dur:21.0,pct:5,lead:"",preds:"18",status:"",notes:""},
+  {id:21,name:"GRACE",level:1,start:"2026-03-09",finish:"2026-04-26",dur:7.0,pct:0,lead:"Norm",preds:"",status:"",notes:""},
+  {id:22,name:"Development",level:2,start:"2026-02-23",finish:"2026-04-12",dur:7.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:23,name:"Documentation",level:2,start:"2026-04-20",finish:"2026-05-10",dur:3.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:24,name:"Aquifer Analyst",level:1,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:0,lead:"Norm",preds:"2.0",status:"",notes:""},
+  {id:25,name:"Development",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:26,name:"Documentation",level:2,start:"2026-04-06",finish:"2026-04-26",dur:3.0,pct:0,lead:"Norm",preds:"25.0",status:"",notes:""},
+  {id:27,name:"RFS New Version",level:1,start:"2026-02-23",finish:"2026-05-31",dur:14.0,pct:4,lead:"Riley",preds:"",status:"",notes:""},
+  {id:28,name:"Kickoff",level:2,start:"2026-02-23",finish:"2026-03-01",dur:1.0,pct:100,lead:"",preds:"",status:"",notes:""},
+  {id:29,name:"Project Outline",level:2,start:"2026-03-02",finish:"2026-03-08",dur:1.0,pct:50,lead:"",preds:"28",status:"",notes:""},
+  {id:30,name:"If new dataset - evaluate & possibly upgrade",level:2,start:"2026-03-09",finish:"2026-05-10",dur:9.0,pct:0,lead:"",preds:"29",status:"",notes:""},
+  {id:31,name:"Reservoir routing",level:2,start:"2026-03-09",finish:"2026-05-10",dur:9.0,pct:0,lead:"",preds:"29",status:"",notes:""},
+  {id:32,name:"Calibration and validation",level:2,start:"2026-03-09",finish:"2026-05-10",dur:9.0,pct:0,lead:"",preds:"29",status:"",notes:""},
+  {id:33,name:"Add nonlinear routing",level:2,start:"2026-03-09",finish:"2026-05-31",dur:12.0,pct:0,lead:"",preds:"29",status:"",notes:""},
+  {id:34,name:"Unit hydrograph runoff transformation",level:2,start:"2026-03-09",finish:"2026-03-29",dur:3.0,pct:0,lead:"",preds:"29",status:"",notes:""},
+  {id:35,name:"Clark Unit hydrographs",level:2,start:"2026-03-30",finish:"2026-05-31",dur:9.0,pct:0,lead:"",preds:"34",status:"",notes:""},
+  {id:36,name:"Documentation",level:2,start:"2026-05-04",finish:"2026-05-24",dur:3.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:37,name:"Extended range forecasts",level:1,start:"2026-02-23",finish:"2026-06-21",dur:17.0,pct:16,lead:"Riley",preds:"",status:"",notes:""},
+  {id:38,name:"Using ECMWF products and routing / model",level:2,start:"2026-02-23",finish:"2026-06-21",dur:17.0,pct:15,lead:"",preds:"",status:"",notes:""},
+  {id:39,name:"Using statistical means from retrospective simulation",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:50,lead:"",preds:"",status:"",notes:""},
+  {id:40,name:"ML based on retrospective simulations",level:2,start:"2026-04-06",finish:"2026-06-21",dur:11.0,pct:0,lead:"",preds:"39",status:"",notes:""},
+  {id:41,name:"Flood maps",level:1,start:"2026-03-09",finish:"2026-07-26",dur:20.0,pct:0,lead:"Riley",preds:"",status:"",notes:""},
+  {id:42,name:"Training Materials. Workshops, Etc.",level:2,start:"2026-02-23",finish:"2026-04-26",dur:9.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:43,name:"Develop Dissemination System",level:2,start:"2026-02-23",finish:"2026-04-26",dur:9.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:44,name:"Refine training and dissemination",level:2,start:"2026-04-27",finish:"2026-07-12",dur:11.0,pct:0,lead:"",preds:"42, 43",status:"",notes:""},
+  {id:45,name:"Flash flood predictions - explore methods",level:1,start:"2026-02-23",finish:"2026-05-31",dur:14.0,pct:40,lead:"Riley",preds:"2",status:"",notes:""},
+  {id:46,name:"\"For the public\" tools or apps",level:1,start:"2026-03-23",finish:"2026-05-31",dur:10.0,pct:0,lead:"Riley",preds:"",status:"",notes:""},
+  {id:47,name:"Report generation per Jamaica example",level:2,start:"2026-03-09",finish:"2026-03-29",dur:3.0,pct:0,lead:"",preds:"29",status:"",notes:""},
+  {id:48,name:"Evaluate use cases and next directions with SERVIR hum users (tech and non-tech)",level:2,start:"2026-04-06",finish:"2026-06-07",dur:9.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:49,name:"Develop User Database",level:1,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:0,lead:"Michael",preds:"2",status:"",notes:""},
+  {id:50,name:"Comms",level:1,start:"2026-01-12",finish:"2026-06-07",dur:21.0,pct:24,lead:"Andrew",preds:"",status:"",notes:""},
+  {id:51,name:"Identify Specific Messaging to Users",level:2,start:"2026-05-11",finish:"2026-06-07",dur:4.0,pct:0,lead:"",preds:"60",status:"",notes:""},
+  {id:52,name:"Review Impact Card Outline",level:2,start:"2026-03-02",finish:"2026-03-22",dur:3.0,pct:100,lead:"",preds:"",status:"",notes:""},
+  {id:53,name:"Create Initial Impact Card Drafts",level:2,start:"2026-03-23",finish:"2026-05-24",dur:9.0,pct:0,lead:"",preds:"52",status:"",notes:""},
+  {id:54,name:"Publish Impact Cards",level:2,start:"2026-05-25",finish:"2026-06-14",dur:3.0,pct:0,lead:"",preds:"53",status:"",notes:""},
+  {id:55,name:"Develop BYU Comms Aligned Priorities",level:2,start:"2026-01-12",finish:"2026-02-22",dur:6.0,pct:50,lead:"",preds:"",status:"",notes:""},
+  {id:56,name:"GEOGLOWS user Competition",level:1,start:"2026-03-09",finish:"2026-05-31",dur:12.0,pct:25,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:57,name:"Create competition parameters",level:2,start:"2026-02-23",finish:"2026-03-01",dur:1.0,pct:90,lead:"",preds:"2",status:"",notes:""},
+  {id:59,name:"Map Timeline",level:2,start:"2026-02-23",finish:"2026-04-26",dur:9.0,pct:100,lead:"",preds:"2",status:"",notes:""},
+  {id:94,name:"Create announcement draft",level:2,start:"2026-03-02",finish:"2026-03-08",dur:1.0,pct:10,lead:"Andrew?",preds:"57.0",status:"",notes:"Due ASAP - Necessary for Messaging partners"},
+  {id:95,name:"Confirm w/ messaging partners",level:2,start:"2026-03-02",finish:"2026-03-15",dur:2.0,pct:10,lead:"Jim/Angelica",preds:"57.0",status:"",notes:"rolling discussions - Mostly Jim and Angelica"},
+  {id:58,name:"Create list of potential participants",level:2,start:"2026-02-23",finish:"2026-03-01",dur:1.0,pct:10,lead:"",preds:"2",status:"",notes:"From messaging partners + GEOGLOWS email lists"},
+  {id:96,name:"Submission package - FINAL - ready",level:2,start:"2026-03-16",finish:"2026-04-12",dur:4.0,pct:10,lead:"",preds:"95.0",status:"",notes:"Ready to go for GEO Symposium and final by May 15"},
+  {id:98,name:"Announcement live",level:2,start:"2026-04-13",finish:"2026-06-21",dur:10.0,pct:0,lead:"",preds:"96, 58",status:"",notes:"Announcement goes from May 15 - August 30"},
+  {id:60,name:"Develop outreach and engagement strategy",level:2,start:"2026-03-02",finish:"2026-05-10",dur:10.0,pct:10,lead:"Angelica",preds:"57, 58",status:"",notes:"Mentorship session invitations"},
+  {id:61,name:"Apps Portal",level:1,start:"2026-03-09",finish:"2026-04-19",dur:6.0,pct:0,lead:"Michael",preds:"",status:"",notes:""},
+  {id:62,name:"Development",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:63,name:"User Authentication",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:64,name:"Data Management",level:2,start:"2026-02-23",finish:"2026-04-05",dur:6.0,pct:0,lead:"",preds:"2",status:"",notes:""},
+  {id:65,name:"Follow Up with South America",level:1,start:"2026-04-13",finish:"2026-05-24",dur:6.0,pct:0,lead:"Michael",preds:"85",status:"",notes:""},
+  {id:66,name:"Ecuador-INAMHI",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"Aquaveo",preds:"",status:"",notes:""},
+  {id:67,name:"Peru-SENAMHI",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"Aquaveo",preds:"",status:"",notes:""},
+  {id:68,name:"Peru-IDEAM",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"Aquaveo",preds:"",status:"",notes:""},
+  {id:69,name:"Brazil-CEMADEN",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"Aquaveo",preds:"",status:"",notes:""},
+  {id:70,name:"Follow Up with Central America",level:1,start:"2026-04-13",finish:"2026-05-24",dur:6.0,pct:0,lead:"Jim",preds:"85",status:"",notes:""},
+  {id:71,name:"Costa Rica-ICE",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:72,name:"Honduras-ENEE",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:73,name:"Panama-IMHPA",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:74,name:"Guatemala-INSIVUMEH",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:75,name:"Nicaragua-INETER",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:76,name:"El Salvador-MARN",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:77,name:"Belize-MNR",level:2,start:"2026-05-04",finish:"2026-06-14",dur:6.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:78,name:"Implementation with Caribbean",level:1,start:"2026-04-13",finish:"2026-06-14",dur:9.0,pct:0,lead:"Jim",preds:"85",status:"",notes:""},
+  {id:79,name:"Cuba \u2013 Institute of Hydraulic Resources (INRH)",level:2,start:"2026-05-04",finish:"2026-07-05",dur:9.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:80,name:"Jamaica \u2013 Water Resources Authority (WRA)",level:2,start:"2026-05-04",finish:"2026-07-05",dur:9.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:81,name:"Trinidad and Tobago \u2013 Water and Sewerage Authority (WASA)",level:2,start:"2026-05-04",finish:"2026-07-05",dur:9.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:82,name:"Haiti \u2013 Hydrometeorological Unit (UHM)",level:2,start:"2026-05-04",finish:"2026-07-05",dur:9.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:83,name:"Implementation in Africa",level:1,start:"2026-04-13",finish:"2026-07-05",dur:12.0,pct:0,lead:"Angelica",preds:"85",status:"",notes:""},
+  {id:84,name:"User Capacity Building",level:1,start:"2026-03-23",finish:"2026-09-06",dur:24.0,pct:0,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:85,name:"Standardize User Implementation Flow",level:2,start:"2026-03-16",finish:"2026-04-12",dur:4.0,pct:0,lead:"Karina",preds:"10",status:"",notes:""},
+  {id:86,name:"Develop Certification / Curriculm Plan",level:2,start:"2026-04-20",finish:"2026-05-17",dur:4.0,pct:0,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:87,name:"Training",level:2,start:"2026-04-13",finish:"2026-09-06",dur:21.0,pct:0,lead:"Michael",preds:"85",status:"",notes:""},
+  {id:88,name:"Case Studies",level:2,start:"2026-04-13",finish:"2026-05-24",dur:6.0,pct:0,lead:"Angelica",preds:"85",status:"",notes:""},
+  {id:89,name:"Webinars",level:2,start:"2026-04-06",finish:"2026-08-30",dur:21.0,pct:0,lead:"Michael",preds:"49",status:"",notes:""},
+  {id:90,name:"World Bank Amazon Training",level:2,start:"2026-06-10",finish:"2026-06-16",dur:1.0,pct:0,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:91,name:"Conferences and Convenings",level:1,start:"2026-01-05",finish:"2026-05-24",dur:20.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:97,name:"PREPARE Mtg",level:2,start:"2026-04-15",finish:"2026-04-28",dur:2.0,pct:10,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:5,name:"GEO Symposium / Plenary",level:2,start:"2026-04-29",finish:"2026-05-05",dur:1.0,pct:0,lead:"Angelica",preds:"",status:"",notes:""},
+  {id:92,name:"AfriGEO (Oct. 5-8)",level:2,start:"2026-10-05",finish:"2026-10-11",dur:1.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:93,name:"Global Flood Partnership (GFP)",level:1,start:"2026-04-20",finish:"2026-08-09",dur:16.0,pct:0,lead:"Jim",preds:"",status:"",notes:""},
+  {id:100,name:"Order break drinks/snacks",level:2,start:"2026-07-20",finish:"2026-08-02",dur:2.0,pct:0,lead:"",preds:"",status:"",notes:""},
+  {id:99,name:"Reservations for all campus rooms needed",level:2,start:"2026-04-20",finish:"2026-05-03",dur:2.0,pct:25,lead:"",preds:"",status:"",notes:""}
+];
+
+// ── Date Helpers ──
+function parseDate(s) {
+  if (!s) return null;
+  s = String(s).trim().split(/[T ]/)[0];
+  let m;
+  if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) return new Date(+m[1], +m[2]-1, +m[3]);
+  if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) return new Date(+m[3], +m[1]-1, +m[2]);
+  return null;
+}
+function daysBetween(a, b) { return Math.round((b - a) / 86400000); }
+function fmtDate(d) { if (!d) return ''; return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function dayOffset(d) { return daysBetween(PROJECT_START, d); }
+const totalDays = daysBetween(PROJECT_START, PROJECT_END);
+const totalWidth = totalDays * DAY_PX;
+
+// ── Parse CSV Rows ──
+function parseSheetRows(rows) {
+  const tasks = [];
+  for (const row of rows) {
+    const id = parseInt(row['ID']);
+    if (!id) continue;
+    const name = (row['Task Name'] || '').trim();
+    if (!name) continue;
+    const level = parseInt(row['Level']) || 1;
+    const lead = (row['Lead'] || '').trim();
+    const dur = parseFloat(row['Duration\n(weeks)'] || row['Duration (weeks)'] || row['Duration'] || 0);
+    const start = parseDate(row['Start Date']);
+    const finish = parseDate(row['Finish Date']);
+    let pct = parseFloat(row['% Complete'] || row['%'] || 0);
+    if (isNaN(pct)) pct = 0;
+    const rawPct = String(row['% Complete'] || row['%'] || '');
+    if (pct <= 1 && !rawPct.includes('%')) pct *= 100;
+    pct = Math.round(Math.min(Math.max(pct, 0), 100));
+    const preds = (row['Predecessors'] || '').trim();
+    const status = (row['Status'] || '').trim();
+    const notes = (row['Notes / Updates'] || row['Notes'] || '').trim();
+    tasks.push({ id, name, level, lead, dur, start, finish, pct, preds, status, notes, summary: false });
+  }
+  // Mark summary tasks
+  for (let i = 0; i < tasks.length; i++) {
+    if (tasks[i].level === 1) {
+      for (let j = i + 1; j < tasks.length; j++) {
+        if (tasks[j].level === 1) break;
+        if (tasks[j].level === 2) { tasks[i].summary = true; break; }
+      }
+    }
+  }
+  return tasks;
+}
+
+function fallbackToTasks(fb) {
+  const tasks = fb.map(r => ({
+    id: r.id, name: r.name, level: r.level, lead: r.lead || '', dur: r.dur,
+    start: parseDate(r.start), finish: parseDate(r.finish), pct: r.pct,
+    preds: r.preds || '', status: r.status || '', notes: r.notes || '', summary: false
+  }));
+  for (let i = 0; i < tasks.length; i++) {
+    if (tasks[i].level === 1) {
+      for (let j = i + 1; j < tasks.length; j++) {
+        if (tasks[j].level === 1) break;
+        if (tasks[j].level === 2) { tasks[i].summary = true; break; }
+      }
+    }
+  }
+  return tasks;
+}
+
+// ── Fetch Data ──
+async function fetchData() {
+  try {
+    const resp = await fetch(SHEET_URL);
+    if (!resp.ok) throw new Error('Direct fetch failed');
+    const csv = await resp.text();
+    return csv;
+  } catch(e) {
+    try {
+      const resp2 = await fetch(PROXY + encodeURIComponent(SHEET_URL));
+      if (!resp2.ok) throw new Error('Proxy fetch failed');
+      return await resp2.text();
+    } catch(e2) {
+      return null;
+    }
+  }
+}
+
+async function loadData() {
+  const csv = await fetchData();
+  if (csv) {
+    const parsed = Papa.parse(csv, { header: true, skipEmptyLines: true });
+    allTasks = parseSheetRows(parsed.data);
+    setLive(true);
+  } else {
+    allTasks = fallbackToTasks(FALLBACK);
+    setLive(false);
+  }
+  updateStats();
+  populateLeadFilter();
+  render();
+}
+
+function setLive(live) {
+  const dot = document.getElementById('liveDot');
+  const txt = document.getElementById('liveText');
+  if (live) { dot.className = 'live-dot'; txt.textContent = 'LIVE'; }
+  else { dot.className = 'live-dot offline'; txt.textContent = 'OFFLINE'; }
+}
+
+function updateStats() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  document.getElementById('statTasks').textContent = allTasks.length;
+  document.getElementById('statProgress').textContent = allTasks.filter(t => t.pct > 0 && t.pct < 100).length;
+  document.getElementById('statComplete').textContent = allTasks.filter(t => t.pct >= 100).length;
+  document.getElementById('statRefresh').textContent = new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+}
+
+function populateLeadFilter() {
+  const sel = document.getElementById('leadFilter');
+  const cur = sel.value;
+  const leads = [...new Set(allTasks.map(t => t.lead).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">All</option>' + leads.map(l => `<option value="${l}">${l}</option>`).join('');
+  sel.value = cur;
+}
+
+// ── Filtering ──
+function getFilteredTasks() {
+  const view = document.getElementById('viewFilter').value;
+  const lead = document.getElementById('leadFilter').value;
+  let tasks = allTasks.slice();
+
+  // Build visibility based on collapse state
+  let visible = [];
+  let skipChildren = false;
+  let skipParentId = null;
+  for (let i = 0; i < tasks.length; i++) {
+    const t = tasks[i];
+    if (t.level === 1) {
+      skipChildren = t.summary && collapsedIds.has(t.id);
+      visible.push(t);
+    } else {
+      if (!skipChildren) visible.push(t);
+    }
+  }
+
+  if (view === 'level1') visible = visible.filter(t => t.level === 1);
+  if (view === 'incomplete') visible = visible.filter(t => t.pct < 100);
+  if (lead) visible = visible.filter(t => t.lead === lead);
+  return visible;
+}
+
+// ── Render ──
+function render() {
+  const tasks = getFilteredTasks();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const tbody = document.getElementById('taskBody');
+  const ganttBody = document.getElementById('ganttBody');
+  const ganttHeader = document.getElementById('ganttHeader');
+
+  // Header months
+  ganttHeader.innerHTML = '';
+  ganttHeader.style.width = totalWidth + 'px';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  for (let m = 0; m < 12; m++) {
+    const mStart = new Date(2026, m, 1);
+    const mEnd = new Date(2026, m + 1, 0);
+    const clampStart = mStart < PROJECT_START ? PROJECT_START : mStart;
+    const clampEnd = mEnd > PROJECT_END ? PROJECT_END : mEnd;
+    if (clampStart > PROJECT_END || clampEnd < PROJECT_START) continue;
+    const left = dayOffset(clampStart) * DAY_PX;
+    const w = (daysBetween(clampStart, clampEnd) + 1) * DAY_PX;
+    const div = document.createElement('div');
+    div.className = 'month-label';
+    div.style.cssText = `position:absolute;left:${left}px;width:${w}px;height:26px;`;
+    div.textContent = months[m] + ' 2026';
+    ganttHeader.appendChild(div);
+  }
+
+  // Grid lines
+  ganttBody.innerHTML = '';
+  ganttBody.style.width = totalWidth + 'px';
+  ganttBody.style.height = (tasks.length * ROW_H) + 'px';
+
+  // Weekly lines
+  let d = new Date(PROJECT_START);
+  while (d <= PROJECT_END) {
+    const off = dayOffset(d) * DAY_PX;
+    const line = document.createElement('div');
+    const isMonth = d.getDate() === 1;
+    line.className = isMonth ? 'grid-line-month' : 'grid-line-week';
+    line.style.left = off + 'px';
+    line.style.height = (tasks.length * ROW_H) + 'px';
+    ganttBody.appendChild(line);
+    d.setDate(d.getDate() + 7);
+  }
+  // Monthly lines
+  for (let m = 0; m < 12; m++) {
+    const mStart = new Date(2026, m, 1);
+    if (mStart < PROJECT_START || mStart > PROJECT_END) continue;
+    const off = dayOffset(mStart) * DAY_PX;
+    const line = document.createElement('div');
+    line.className = 'grid-line-month';
+    line.style.left = off + 'px';
+    line.style.height = (tasks.length * ROW_H) + 'px';
+    ganttBody.appendChild(line);
+  }
+
+  // Today line
+  if (today >= PROJECT_START && today <= PROJECT_END) {
+    const tl = document.createElement('div');
+    tl.className = 'today-line';
+    tl.style.left = (dayOffset(today) * DAY_PX) + 'px';
+    tl.style.height = (tasks.length * ROW_H) + 'px';
+    ganttBody.appendChild(tl);
+  }
+
+  // Rows
+  tbody.innerHTML = '';
+  tasks.forEach((t, idx) => {
+    // Table row
+    const tr = document.createElement('tr');
+    if (t.summary) tr.className = 'summary-row';
+
+    const tdId = document.createElement('td');
+    tdId.textContent = t.id;
+    tr.appendChild(tdId);
+
+    const tdName = document.createElement('td');
+    const indent = (t.level - 1) * 4;
+    let nameHtml = '&nbsp;'.repeat(indent);
+    if (t.summary) {
+      const expanded = !collapsedIds.has(t.id);
+      nameHtml += `<span class="toggle-caret ${expanded ? 'expanded' : ''}" data-id="${t.id}">&#9654;</span>`;
+    }
+    nameHtml += escHtml(t.name);
+    tdName.innerHTML = nameHtml;
+    tdName.style.maxWidth = '280px';
+    tdName.style.overflow = 'hidden';
+    tdName.style.textOverflow = 'ellipsis';
+    tr.appendChild(tdName);
+
+    const tdLead = document.createElement('td');
+    tdLead.textContent = t.lead;
+    tr.appendChild(tdLead);
+
+    const tdPct = document.createElement('td');
+    const barColor = t.pct >= 100 ? '#27ae60' : '#3498db';
+    tdPct.innerHTML = `<span style="font-size:0.68rem;margin-right:3px;">${t.pct}%</span><span class="mini-prog"><span class="mini-prog-fill" style="width:${t.pct}%;background:${barColor}"></span></span>`;
+    tr.appendChild(tdPct);
+
+    tbody.appendChild(tr);
+
+    // Gantt row
+    const grow = document.createElement('div');
+    grow.className = 'gantt-row';
+    grow.style.height = ROW_H + 'px';
+
+    if (t.start && t.finish) {
+      const sOff = dayOffset(t.start);
+      const dur = daysBetween(t.start, t.finish) + 1;
+      const left = sOff * DAY_PX;
+      const w = dur * DAY_PX;
+
+      if (t.summary) {
+        const bar = document.createElement('div');
+        bar.className = 'bar-summary';
+        bar.style.left = left + 'px';
+        bar.style.width = Math.max(w, 6) + 'px';
+        bar.dataset.idx = idx;
+        grow.appendChild(bar);
+      } else {
+        let color = '#3498db';
+        if (t.pct >= 100) color = '#27ae60';
+        else if (t.pct < 100 && t.finish < today) color = '#e74c3c';
+
+        const bar = document.createElement('div');
+        bar.className = 'bar';
+        bar.style.left = left + 'px';
+        bar.style.width = Math.max(w, 3) + 'px';
+        bar.style.background = color;
+        bar.dataset.idx = idx;
+
+        if (t.pct > 0 && t.pct < 100) {
+          const prog = document.createElement('div');
+          prog.className = 'bar-progress';
+          prog.style.width = (100 - t.pct) + '%';
+          prog.style.left = t.pct + '%';
+          bar.appendChild(prog);
+        }
+        grow.appendChild(bar);
+      }
+    }
+    ganttBody.appendChild(grow);
+  });
+
+  // Event delegation for carets
+  tbody.querySelectorAll('.toggle-caret').forEach(c => {
+    c.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = parseInt(c.dataset.id);
+      if (collapsedIds.has(id)) collapsedIds.delete(id);
+      else collapsedIds.add(id);
+      render();
+    });
+  });
+
+  // Tooltip events
+  const tooltip = document.getElementById('tooltip');
+  ganttBody.querySelectorAll('.bar, .bar-summary').forEach(bar => {
+    bar.addEventListener('mouseenter', (e) => {
+      const t = tasks[parseInt(bar.dataset.idx)];
+      if (!t) return;
+      let statusText = 'Not Started';
+      if (t.pct >= 100) statusText = 'Complete';
+      else if (t.pct < 100 && t.finish && t.finish < today) statusText = 'Overdue';
+      else if (t.pct > 0) statusText = 'In Progress';
+
+      let html = `<div class="tt-title">${escHtml(t.name)}</div>`;
+      if (t.lead) html += `<div class="tt-row"><span class="tt-label">Lead:</span>${escHtml(t.lead)}</div>`;
+      html += `<div class="tt-row"><span class="tt-label">Dates:</span>${fmtDate(t.start)} &ndash; ${fmtDate(t.finish)}</div>`;
+      html += `<div class="tt-row"><span class="tt-label">Duration:</span>${t.dur} weeks</div>`;
+      html += `<div class="tt-row"><span class="tt-label">Progress:</span>${t.pct}%</div>`;
+      html += `<div class="tt-row"><span class="tt-label">Status:</span>${statusText}</div>`;
+      if (t.preds) html += `<div class="tt-row"><span class="tt-label">Predecessors:</span>${escHtml(t.preds)}</div>`;
+      if (t.notes) html += `<div class="tt-row"><span class="tt-label">Notes:</span>${escHtml(t.notes)}</div>`;
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
+    });
+    bar.addEventListener('mousemove', (e) => {
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY + 14) + 'px';
+    });
+    bar.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+  });
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── Auto-refresh ──
+function setupRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  const ms = parseInt(document.getElementById('refreshInterval').value);
+  if (ms > 0) refreshTimer = setInterval(loadData, ms);
+}
+
+document.getElementById('refreshInterval').addEventListener('change', setupRefresh);
+document.getElementById('refreshBtn').addEventListener('click', loadData);
+document.getElementById('viewFilter').addEventListener('change', render);
+document.getElementById('leadFilter').addEventListener('change', render);
+
+// ── Init ──
+loadData().then(setupRefresh);
+</script>
+</body>
+</html>
