@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GEOGLOWS Project — Live Gantt Chart</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background:#f0f2f5; color:#222; }
+
+  /* Header */
+  .header {
+    background: linear-gradient(135deg, #1B3A5C, #2d6a9f);
+    color: #fff; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap:10px;
+  }
+  .header-left { display:flex; flex-direction:column; }
+  .header-left h1 { font-size:1.35rem; font-weight:700; }
+  .header-left .subtitle { font-size:0.8rem; opacity:0.8; margin-top:2px; }
+  .header-right { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+  .live-badge { display:flex; align-items:center; gap:6px; background:rgba(255,255,255,0.15); padding:5px 12px; border-radius:20px; font-size:0.78rem; font-weight:600; }
+  .live-dot { width:9px; height:9px; border-radius:50%; background:#2ecc71; animation: pulse 1.5s infinite; }
+  .live-dot.offline { background:#e74c3c; animation:none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .stat-box { text-align:center; background:rgba(255,255,255,0.12); padding:6px 14px; border-radius:8px; }
+  .stat-box .val { font-size:1.1rem; font-weight:700; }
+  .stat-box .lbl { font-size:0.65rem; opacity:0.75; text-transform:uppercase; }
+
+  /* Controls */
+  .controls {
+    background:#fff; padding:10px 24px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    border-bottom:1px solid #ddd; box-shadow:0 1px 3px rgba(0,0,0,0.06);
+  }
+  .controls label { font-size:0.75rem; font-weight:600; color:#555; }
+  .controls select, .controls button {
+    font-size:0.78rem; padding:5px 10px; border:1px solid #ccc; border-radius:5px; background:#fff; cursor:pointer;
+  }
+  .controls button { background:#2d6a9f; color:#fff; border:none; font-weight:600; }
+  .controls button:hover { background:#1B3A5C; }
+  .legend { display:flex; gap:12px; margin-left:auto; align-items:center; font-size:0.72rem; }
+  .legend-item { display:flex; align-items:center; gap:4px; }
+  .legend-swatch { width:14px; height:10px; border-radius:2px; }
+
+  /* Chart wrapper */
+  .chart-wrapper {
+    display:flex; overflow:auto; max-height:calc(100vh - 160px); position:relative; margin:0; background:#fff;
+  }
+
+  /* Task Table */
+  .task-table {
+    border-collapse:collapse; position:sticky; left:0; z-index:20; background:#fff;
+    border-right:2px solid #1B3A5C; flex-shrink:0;
+  }
+  .task-table th {
+    position:sticky; top:0; z-index:25; background:#1B3A5C; color:#fff;
+    font-size:0.7rem; padding:6px 8px; text-align:left; white-space:nowrap; border-right:1px solid rgba(255,255,255,0.2);
+  }
+  .task-table td {
+    font-size:0.72rem; padding:3px 8px; border-bottom:1px solid #eee; white-space:nowrap; height:26px; vertical-align:middle;
+  }
+  .task-table tr:hover td { background:#eef5ff; }
+  .task-table tr.summary-row td { font-weight:700; background:#f7f9fc; }
+
+  /* Mini progress bar */
+  .mini-prog { width:48px; height:10px; background:#e0e0e0; border-radius:5px; display:inline-block; vertical-align:middle; overflow:hidden; }
+  .mini-prog-fill { height:100%; border-radius:5px; }
+
+  /* Gantt area */
+  .gantt-area { position:relative; flex-grow:1; }
+  .gantt-header {
+    position:sticky; top:0; z-index:15; height:26px; background:#1B3A5C; display:flex;
+  }
+  .gantt-header .month-label {
+    color:#fff; font-size:0.68rem; font-weight:600; text-align:center; border-right:1px solid rgba(255,255,255,0.25);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .gantt-body { position:relative; }
+  .gantt-row { position:relative; height:26px; border-bottom:1px solid #f0f0f0; }
+  .gantt-row:hover { background:#f8fbff; }
+
+  /* Grid lines */
+  .grid-line-week { position:absolute; top:0; bottom:0; width:1px; background:rgba(0,0,0,0.04); z-index:1; pointer-events:none; }
+  .grid-line-month { position:absolute; top:0; bottom:0; width:1px; background:rgba(0,0,0,0.12); z-index:1; pointer-events:none; }
+  .grid-line-year { position:absolute; top:0; bottom:0; width:2px; background:rgba(27,58,92,0.28); z-index:2; pointer-events:none; }
+  .today-line { position:absolute; top:0; bottom:0; width:2px; background:#e74c3c; z-index:10; pointer-events:none; }
+
+  /* Bars */
+  .bar {
+    position:absolute; top:7px; height:12px; border-radius:3px; z-index:5; cursor:pointer; min-width:3px;
+    transition: filter 0.15s;
+  }
+  .bar:hover { filter:brightness(1.15); }
+  .bar-progress { position:absolute; top:0; left:0; height:100%; border-radius:3px; opacity:0.35; background:#fff; }
+  .bar-summary {
+    position:absolute; top:10px; height:6px; z-index:5; cursor:pointer; opacity:0.7;
+    background:var(--sumcolor,#1B3A5C); min-width:6px;
+  }
+  .bar-summary::before, .bar-summary::after {
+    content:''; position:absolute; bottom:-4px; width:0; height:0;
+    border-left:4px solid transparent; border-right:4px solid transparent; border-top:4px solid var(--sumcolor,#1B3A5C);
+  }
+  .bar-summary::before { left:0; }
+  .bar-summary::after { right:0; }
+
+  /* Caret */
+  .toggle-caret {
+    display:inline-block; cursor:pointer; font-size:0.65rem; margin-right:3px;
+    transition:transform 0.2s; user-select:none; color:#1B3A5C;
+  }
+  .toggle-caret.expanded { transform:rotate(90deg); }
+
+  /* Tooltip */
+  .tooltip {
+    position:fixed; z-index:100; background:#fff; border:1px solid #ccc; border-radius:8px;
+    padding:10px 14px; font-size:0.75rem; box-shadow:0 4px 16px rgba(0,0,0,0.15);
+    pointer-events:none; max-width:320px; display:none; line-height:1.5;
+  }
+  .tooltip .tt-title { font-weight:700; font-size:0.82rem; margin-bottom:4px; color:#1B3A5C; }
+  .tooltip .tt-row { display:flex; gap:6px; }
+  .tooltip .tt-label { font-weight:600; color:#555; min-width:75px; }
+
+  /* Print */
+  @media print {
+    .controls { display:none !important; }
+    .chart-wrapper { max-height:none !important; overflow:visible !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>GEOGLOWS Project &mdash; Live Gantt Chart</h1>
+    <div class="subtitle">BYU &bull; Team-lead view &bull; Live from Google Sheets &bull; 2026-2028</div>
+  </div>
+  <div class="header-right">
+    <div class="live-badge"><span class="live-dot" id="liveDot"></span><span id="liveText">LIVE</span></div>
+    <div class="stat-box"><div class="val" id="statTasks">0</div><div class="lbl">Tasks</div></div>
+    <div class="stat-box"><div class="val" id="statProgress">0</div><div class="lbl">In Progress</div></div>
+    <div class="stat-box"><div class="val" id="statComplete">0</div><div class="lbl">Complete</div></div>
+    <div class="stat-box"><div class="val" id="statRefresh">--</div><div class="lbl">Last Refresh</div></div>
+  </div>
+</div>
+
+<div class="controls">
+  <label>View:
+    <select id="viewFilter">
+      <option value="all">All Tasks</option>
+      <option value="level1">Level 1 Only</option>
+      <option value="incomplete">Incomplete Only</option>
+    </select>
+  </label>
+  <label>Lead:
+    <select id="leadFilter"><option value="">All</option></select>
+  </label>
+  <label>Auto-refresh:
+    <select id="refreshInterval">
+      <option value="0">Off</option>
+      <option value="60000">1 min</option>
+      <option value="300000" selected>5 min</option>
+      <option value="900000">15 min</option>
+    </select>
+  </label>
+  <button id="refreshBtn">Refresh Now</button>
+  <div class="legend">
+    <div class="legend-item"><span class="legend-swatch" style="background:#2980b9"></span>In Progress</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#229954"></span>Complete</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#e74c3c"></span>Overdue</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#1B3A5C"></span>Lead</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#2d6a9f"></span>Project</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#8a97a8;height:2px"></span>Dependency</div>
+  </div>
+</div>
+
+<div class="chart-wrapper" id="chartWrapper">
+  <table class="task-table" id="taskTable">
+    <thead><tr><th>ID</th><th>Task Name</th><th>Support</th><th>%</th></tr></thead>
+    <tbody id="taskBody"></tbody>
+  </table>
+  <div class="gantt-area" id="ganttArea">
+    <div class="gantt-header" id="ganttHeader"></div>
+    <div class="gantt-body" id="ganttBody"></div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ── Constants ──
+const PROJECT_START = new Date(2026, 0, 5);
+const PROJECT_END   = new Date(2028, 11, 31);
+const DAY_PX = 2.8;
+const ROW_H  = 26;
+const LEVEL_COLORS = {1:'#1B3A5C',2:'#2d6a9f',3:'#2d6a9f'}; // summary bar/label color by level
+const PREVIEW = false;             // production: fetch live sheet; embedded data is fallback only
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRO_ONneECIjz_KbYXw_6xyazauFt2uv_VMiWVdPP64CY4IaTCfylMaw1sA7xVFrS_nB3BvX5zx2RWJ/pub?gid=548050391&single=true&output=csv';  // live published CSV (Project Schedule tab)
+const PROXY = 'https://api.allorigins.win/raw?url=';
+
+let allTasks = [];
+let collapsedIds = new Set();
+let refreshTimer = null;
+
+// ── Sample Data (team-lead structure; leaf dates are ILLUSTRATIVE placeholders) ──
+const FALLBACK = [
+  {id:100,lead:"Jim",support:"",level:1,name:"Jim",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:101,lead:"Jim",support:"",level:2,name:"Project management and team coordination",start:"2026-01-05",finish:"2026-12-31",pct:40,preds:"",status:"Ongoing",notes:""},
+  {id:102,lead:"Jim",support:"",level:3,name:"Mission / Vision alignment",start:"2026-01-05",finish:"2026-01-11",pct:100,preds:"",status:"Complete",notes:"Gen-1 #1"},
+  {id:103,lead:"Jim",support:"",level:3,name:"Re-orient roles and responsibilities",start:"2026-01-12",finish:"2026-02-22",pct:100,preds:"",status:"Complete",notes:"Gen-1 #2"},
+  {id:104,lead:"Jim",support:"",level:2,name:"Google.org",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:105,lead:"Jim",support:"",level:2,name:"Caribbean",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:106,lead:"Jim",support:"",level:2,name:"CIROH - Floodplain work",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:107,lead:"Jim",support:"Angelica",level:2,name:"SERVIR seed project development and continued capacity building",start:"2026-04-20",finish:"2026-12-27",pct:78,preds:"",status:"In Progress",notes:"Gen-1 #4"},
+  {id:108,lead:"Jim",support:"",level:3,name:"Collaborative overview plan development",start:"2026-04-22",finish:"2026-06-02",pct:100,preds:"",status:"Complete",notes:"Gen-1 #106"},
+  {id:109,lead:"Jim",support:"",level:3,name:"Hub stakeholder identification and GEOGLOWS hub training",start:"2026-06-03",finish:"2026-07-28",pct:100,preds:"108",status:"Complete",notes:"Gen-1 #107 | example link"},
+  {id:110,lead:"Jim",support:"",level:3,name:"GFP meeting and coordination of hub proposed activities",start:"2026-06-03",finish:"2026-08-04",pct:100,preds:"109",status:"Complete",notes:"Gen-1 #108 | example link"},
+  {id:111,lead:"Jim",support:"Riley / Andrew",level:2,name:"Student Research and Experiential Learning",start:"2026-04-01",finish:"2026-06-02",pct:49,preds:"",status:"In Progress",notes:"Gen-1 #6"},
+  {id:112,lead:"Jim",support:"",level:3,name:"Hire new Postdoc",start:"2026-04-01",finish:"2026-05-12",pct:60,preds:"",status:"In Progress",notes:"Gen-1 #110"},
+  {id:113,lead:"Jim",support:"Riley",level:3,name:"Summer research plans",start:"2026-04-01",finish:"2026-05-05",pct:100,preds:"",status:"Complete",notes:"Gen-1 #111"},
+  {id:114,lead:"Jim",support:"",level:2,name:"Global Flood Partnership (GFP) 2026",start:"2026-04-20",finish:"2026-08-09",pct:50,preds:"",status:"In Progress",notes:"Gen-1 #93"},
+  {id:115,lead:"Jim",support:"",level:3,name:"Reservations for all campus rooms",start:"2026-04-20",finish:"2026-05-03",pct:100,preds:"",status:"Complete",notes:"Gen-1 #99"},
+  {id:200,lead:"Riley",support:"",level:1,name:"Riley",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:201,lead:"Riley",support:"",level:2,name:"RFS V3",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:202,lead:"Riley",support:"",level:3,name:"Bias correction",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:203,lead:"Riley",support:"",level:3,name:"Hydrofabric refinements",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:204,lead:"Riley",support:"",level:3,name:"River Route - routing improvements",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:205,lead:"Riley",support:"",level:3,name:"Unit hydrographs",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:206,lead:"Riley",support:"",level:3,name:"Flood mapping",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:207,lead:"Riley",support:"",level:3,name:"Documentation / training",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:208,lead:"Riley",support:"",level:3,name:"RFS v3 first build (Gen 1)",start:"2026-02-23",finish:"2026-05-31",pct:100,preds:"",status:"Complete",notes:"Gen-1 #1000"},
+  {id:209,lead:"Riley",support:"",level:3,name:"RFS v3 kickoff (Gen 1)",start:"2026-04-15",finish:"2026-04-28",pct:100,preds:"",status:"Complete",notes:"Gen-1 #1001"},
+  {id:210,lead:"Riley",support:"",level:3,name:"Project outline (Gen 1)",start:"2026-03-02",finish:"2026-03-08",pct:50,preds:"",status:"In Progress",notes:"Gen-1 #29"},
+  {id:211,lead:"Riley",support:"",level:3,name:"Statistical means from retrospective simulation (Gen 1)",start:"2026-02-23",finish:"2026-04-05",pct:50,preds:"",status:"In Progress",notes:"Gen-1 #39"},
+  {id:212,lead:"Riley",support:"",level:2,name:"HydroSOS application",start:"2026-08-05",finish:"2026-09-15",pct:null,preds:"110",status:"",notes:"example link"},
+  {id:213,lead:"Riley",support:"",level:2,name:"Flood Early Warning Multi-Model application / dashboard",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:214,lead:"Riley",support:"",level:3,name:"Flash flood predictions - explore methods (Gen 1)",start:"2026-02-23",finish:"2026-05-31",pct:40,preds:"",status:"In Progress",notes:"Gen-1 #45"},
+  {id:215,lead:"Riley",support:"Norm",level:2,name:"GRACE application",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:216,lead:"Riley",support:"",level:2,name:"Student project management",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:217,lead:"Riley",support:"",level:2,name:"Impact-centric publications (scoping)",start:"2026-04-27",finish:"2026-05-24",pct:25,preds:"",status:"In Progress",notes:"Gen-1 #7"},
+  {id:300,lead:"Angelica",support:"",level:1,name:"Angelica",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:301,lead:"Angelica",support:"",level:2,name:"WMO / SERVIR project development",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:302,lead:"Angelica",support:"Michael",level:2,name:"GEOGLOWS Web Landing Page",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:303,lead:"Angelica",support:"Andrew",level:2,name:"Outreach",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:304,lead:"Angelica",support:"Andrew",level:3,name:"Newsletter",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:305,lead:"Angelica",support:"Andrew",level:3,name:"Webinars",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:306,lead:"Angelica",support:"Andrew",level:3,name:"Events / Impact Stories",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:307,lead:"Angelica",support:"",level:2,name:"GEO",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:308,lead:"Angelica",support:"Andrew",level:3,name:"AfriGEO Stakeholder Mapping",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:309,lead:"Angelica",support:"",level:3,name:"GEO Secretariat",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:310,lead:"Angelica",support:"",level:2,name:"GEO Symposium / Plenary 2026",start:"2026-04-01",finish:"2026-06-02",pct:100,preds:"",status:"Complete",notes:"Gen-1 #5"},
+  {id:311,lead:"Angelica",support:"",level:3,name:"GEOGLOWS Community side event agenda",start:"2026-04-01",finish:"2026-04-28",pct:100,preds:"",status:"Complete",notes:"Gen-1 #103"},
+  {id:312,lead:"Angelica",support:"",level:3,name:"GEOGLOWS partnerships meeting agenda",start:"2026-04-01",finish:"2026-05-12",pct:100,preds:"",status:"Complete",notes:"Gen-1 #104"},
+  {id:313,lead:"Angelica",support:"",level:3,name:"Prepare and send invitations to panelists",start:"2026-04-20",finish:"2026-04-26",pct:100,preds:"",status:"Complete",notes:"Gen-1 #105"},
+  {id:314,lead:"Angelica",support:"",level:2,name:"GEOGLOWS User Competition",start:"2026-03-09",finish:"2026-05-31",pct:35,preds:"",status:"In Progress",notes:"Gen-1 #56"},
+  {id:315,lead:"Angelica",support:"",level:3,name:"Create competition parameters",start:"2026-02-23",finish:"2026-03-01",pct:90,preds:"",status:"In Progress",notes:"Gen-1 #57"},
+  {id:316,lead:"Angelica",support:"Andrew",level:3,name:"Create announcement draft",start:"2026-03-02",finish:"2026-03-08",pct:50,preds:"",status:"In Progress",notes:"Gen-1 #94"},
+  {id:317,lead:"Angelica",support:"",level:3,name:"Map competition timeline",start:"2026-02-23",finish:"2026-04-26",pct:100,preds:"",status:"Complete",notes:"Gen-1 #59"},
+  {id:400,lead:"Michael",support:"",level:1,name:"Michael",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:401,lead:"Michael",support:"Riley",level:2,name:"Validation Suite",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:402,lead:"Michael",support:"",level:2,name:"Web Page Development",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:403,lead:"Michael",support:"Angelica",level:3,name:"Landing Page",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:404,lead:"Michael",support:"Riley",level:3,name:"Apps Portal",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:405,lead:"Michael",support:"Riley / Norm",level:3,name:"User Authentication",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:406,lead:"Michael",support:"",level:3,name:"Consistent template for training and connected pages",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:407,lead:"Michael",support:"",level:3,name:"Develop User Database (Gen 1)",start:"2026-05-04",finish:"2026-06-14",pct:25,preds:"",status:"In Progress",notes:"Gen-1 #49"},
+  {id:408,lead:"Michael",support:"Riley",level:2,name:"ECFLOW Operational Suite",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:409,lead:"Michael",support:"Riley / Norm",level:2,name:"Training updates",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:500,lead:"Norm",support:"",level:1,name:"Norm",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:501,lead:"Norm",support:"Angelica",level:2,name:"PREPARE project management / reporting",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:502,lead:"Norm",support:"",level:2,name:"Aquifer Analyst",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:503,lead:"Norm",support:"",level:3,name:"Application",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:504,lead:"Norm",support:"",level:3,name:"Documentation / training",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:505,lead:"Norm",support:"",level:3,name:"Support to update/train Cuba / Jamaica / Trinidad and Tobago (maybe)",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:506,lead:"Norm",support:"",level:2,name:"GRACE",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:507,lead:"Norm",support:"Riley",level:3,name:"Application",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:508,lead:"Norm",support:"",level:3,name:"Updates to documentation / training",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:600,lead:"Andrew",support:"",level:1,name:"Andrew",start:"",finish:"",pct:null,preds:"",status:"",notes:""},
+  {id:601,lead:"Andrew",support:"Riley",level:2,name:"Impact assessment",start:"2026-02-23",finish:"2026-05-03",pct:65,preds:"",status:"In Progress",notes:"Gen-1 #8"},
+  {id:602,lead:"Andrew",support:"",level:3,name:"Create v1 Impact Road Map draft",start:"2026-02-23",finish:"2026-04-05",pct:80,preds:"",status:"In Progress",notes:"Gen-1 #9"},
+  {id:603,lead:"Andrew",support:"",level:3,name:"Create user impact evaluation protocol",start:"2026-02-23",finish:"2026-03-15",pct:50,preds:"",status:"In Progress",notes:"Gen-1 #10"},
+  {id:604,lead:"Andrew",support:"",level:3,name:"Connect and outline plan w/ Ballard Center",start:"2026-02-23",finish:"2026-04-26",pct:100,preds:"",status:"Complete",notes:"Gen-1 #12"},
+  {id:605,lead:"Andrew",support:"",level:3,name:"Do Good. Better. Conference",start:"2026-03-12",finish:"2026-03-18",pct:100,preds:"",status:"Complete",notes:"Gen-1 #13"},
+  {id:606,lead:"Andrew",support:"",level:3,name:"Review impact card outline",start:"2026-02-23",finish:"2026-03-22",pct:100,preds:"",status:"Complete",notes:"Gen-1 #16"},
+  {id:607,lead:"Andrew",support:"Angelica",level:2,name:"Comms assets development and messaging",start:"2026-01-12",finish:"2026-06-07",pct:31,preds:"",status:"In Progress",notes:"Gen-1 #50"},
+  {id:608,lead:"Andrew",support:"",level:3,name:"Develop strategy w/ BYU Comms",start:"2026-02-23",finish:"2026-04-05",pct:50,preds:"",status:"In Progress",notes:"Gen-1 #11"},
+  {id:609,lead:"Andrew",support:"",level:3,name:"Communications plan",start:"2026-05-11",finish:"2026-05-24",pct:100,preds:"",status:"Complete",notes:"Gen-1 #119"},
+  {id:610,lead:"Andrew",support:"",level:3,name:"Team convening",start:"2026-04-27",finish:"2026-05-03",pct:100,preds:"",status:"Complete",notes:"Gen-1 #114"},
+  {id:611,lead:"Andrew",support:"Clifton",level:2,name:"Ballard Center Honduras Consortium Project",start:"2026-04-27",finish:"2027-11-07",pct:26,preds:"",status:"In Progress",notes:"Gen-1 #113"},
+  {id:612,lead:"Andrew",support:"",level:2,name:"GEOGLOWS Project Plan Framework (Gen 1)",start:"2026-01-12",finish:"2026-03-01",pct:100,preds:"",status:"Complete",notes:"Gen-1 #3"},
+];
+
+
+// ── Date Helpers ──
+function parseDate(s){
+  if(!s) return null;
+  s=String(s).trim().split(/[T ]/)[0];
+  let m;
+  if((m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) return new Date(+m[1],+m[2]-1,+m[3]);
+  if((m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) return new Date(+m[3],+m[1]-1,+m[2]);
+  return null;
+}
+function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+function fmtDate(d){ if(!d) return ''; return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+function dayOffset(d){ return daysBetween(PROJECT_START,d); }
+const totalDays=daysBetween(PROJECT_START,PROJECT_END);
+const totalWidth=totalDays*DAY_PX;
+
+// ── Structure helpers ──
+function markSummaries(tasks){
+  for(let i=0;i<tasks.length;i++){
+    tasks[i].summary=(i+1<tasks.length && tasks[i+1].level>tasks[i].level);
+  }
+}
+function computeRollups(tasks){
+  for(let i=tasks.length-1;i>=0;i--){
+    const t=tasks[i];
+    if(!t.summary) continue;
+    const starts=[],finishes=[],pcts=[];
+    for(let j=i+1;j<tasks.length;j++){
+      if(tasks[j].level<=t.level) break;
+      if(!tasks[j].summary){
+        if(tasks[j].start) starts.push(tasks[j].start.getTime());
+        if(tasks[j].finish) finishes.push(tasks[j].finish.getTime());
+        pcts.push(tasks[j].pct);
+      }
+    }
+    if(starts.length && !t.start) t.start=new Date(Math.min.apply(null,starts));
+    if(finishes.length && !t.finish) t.finish=new Date(Math.max.apply(null,finishes));
+    if(pcts.length && (t.pct===null||t.pct===undefined)) t.pct=Math.round(pcts.reduce((a,b)=>a+b,0)/pcts.length);
+  }
+}
+
+// ── Parse CSV Rows ──
+function parseSheetRows(rows){
+  const tasks=[];
+  for(const row of rows){
+    const id=parseInt(row['ID']); if(!id) continue;
+    const name=(row['Task Name']||'').trim(); if(!name) continue;
+    const level=parseInt(row['Level'])||1;
+    const lead=(row['Lead']||'').trim();
+    const support=(row['Support']||'').trim();
+    const start=parseDate(row['Start Date']);
+    const finish=parseDate(row['Finish Date']);
+    const rawPct=String(row['% Complete']||row['%']||'').trim();
+    let pct=null;
+    if(rawPct!==''){ pct=parseFloat(rawPct); if(isNaN(pct)) pct=null; else { if(pct<=1 && !rawPct.includes('%')) pct*=100; pct=Math.round(Math.min(Math.max(pct,0),100)); } }
+    const preds=(row['Depends On']||row['Predecessors']||'').trim();
+    const status=(row['Status']||'').trim();
+    const notes=(row['Notes / Updates']||row['Notes']||'').trim();
+    tasks.push({id,name,level,lead,support,start,finish,pct,preds,status,notes,summary:false});
+  }
+  markSummaries(tasks); computeRollups(tasks); tasks.forEach(t=>{if(t.pct==null)t.pct=0;});
+  return tasks;
+}
+function fallbackToTasks(fb){
+  const tasks=fb.map(r=>({
+    id:r.id,name:r.name,level:r.level,lead:r.lead||'',support:r.support||'',
+    start:parseDate(r.start),finish:parseDate(r.finish),pct:(r.pct==null?null:r.pct),
+    preds:r.preds||'',status:r.status||'',notes:r.notes||'',summary:false
+  }));
+  markSummaries(tasks); computeRollups(tasks); tasks.forEach(t=>{if(t.pct==null)t.pct=0;});
+  return tasks;
+}
+
+// ── Fetch Data ──
+async function fetchData(){
+  try{
+    const resp=await fetch(SHEET_URL);
+    if(!resp.ok) throw new Error('Direct fetch failed');
+    return await resp.text();
+  }catch(e){
+    try{
+      const resp2=await fetch(PROXY+encodeURIComponent(SHEET_URL));
+      if(!resp2.ok) throw new Error('Proxy fetch failed');
+      return await resp2.text();
+    }catch(e2){ return null; }
+  }
+}
+async function loadData(){
+  if(PREVIEW || !SHEET_URL){
+    allTasks=fallbackToTasks(FALLBACK); setLive('preview');
+  }else{
+    const csv=await fetchData();
+    if(csv){ const parsed=Papa.parse(csv,{header:true,skipEmptyLines:true}); allTasks=parseSheetRows(parsed.data); setLive(true); }
+    else { allTasks=fallbackToTasks(FALLBACK); setLive(false); }
+  }
+  updateStats(); populateLeadFilter(); render();
+}
+function setLive(state){
+  const dot=document.getElementById('liveDot'); const txt=document.getElementById('liveText');
+  if(state==='preview'){ dot.className='live-dot offline'; dot.style.background='#f39c12'; txt.textContent='SNAPSHOT'; }
+  else if(state){ dot.className='live-dot'; dot.style.background=''; txt.textContent='LIVE'; }
+  else { dot.className='live-dot offline'; dot.style.background=''; txt.textContent='OFFLINE'; }
+}
+function updateStats(){
+  document.getElementById('statTasks').textContent=allTasks.length;
+  document.getElementById('statProgress').textContent=allTasks.filter(t=>t.pct>0&&t.pct<100).length;
+  document.getElementById('statComplete').textContent=allTasks.filter(t=>t.pct>=100).length;
+  document.getElementById('statRefresh').textContent=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});
+}
+function populateLeadFilter(){
+  const sel=document.getElementById('leadFilter'); const cur=sel.value;
+  const leads=[...new Set(allTasks.map(t=>t.lead).filter(Boolean))];
+  sel.innerHTML='<option value="">All</option>'+leads.map(l=>`<option value="${l}">${l}</option>`).join('');
+  sel.value=cur;
+}
+
+// ── Filtering ──
+function getFilteredTasks(){
+  const view=document.getElementById('viewFilter').value;
+  const lead=document.getElementById('leadFilter').value;
+  const tasks=allTasks.slice();
+  let visible=[]; let hideDeeperThan=Infinity;
+  for(const t of tasks){
+    if(t.level<=hideDeeperThan) hideDeeperThan=Infinity;
+    if(t.level>hideDeeperThan) continue;
+    visible.push(t);
+    if(t.summary && collapsedIds.has(t.id)) hideDeeperThan=t.level;
+  }
+  if(view==='level1') visible=visible.filter(t=>t.level===1);
+  if(view==='incomplete') visible=visible.filter(t=>t.pct<100);
+  if(lead) visible=visible.filter(t=>t.lead===lead);
+  return visible;
+}
+
+// ── Render ──
+function render(){
+  const tasks=getFilteredTasks();
+  const today=new Date(); today.setHours(0,0,0,0);
+  const tbody=document.getElementById('taskBody');
+  const ganttBody=document.getElementById('ganttBody');
+  const ganttHeader=document.getElementById('ganttHeader');
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const y0=PROJECT_START.getFullYear(), y1=PROJECT_END.getFullYear();
+
+  // Header (months across all years; year shown on January)
+  ganttHeader.innerHTML=''; ganttHeader.style.width=totalWidth+'px';
+  for(let y=y0;y<=y1;y++) for(let m=0;m<12;m++){
+    const mStart=new Date(y,m,1), mEnd=new Date(y,m+1,0);
+    const cS=mStart<PROJECT_START?PROJECT_START:mStart, cE=mEnd>PROJECT_END?PROJECT_END:mEnd;
+    if(cS>PROJECT_END||cE<PROJECT_START) continue;
+    const left=dayOffset(cS)*DAY_PX, w=(daysBetween(cS,cE)+1)*DAY_PX;
+    const div=document.createElement('div'); div.className='month-label';
+    div.style.cssText=`position:absolute;left:${left}px;width:${w}px;height:26px;`;
+    div.textContent = (m===0)? months[m]+" "+y : months[m];
+    if(m===0) div.style.fontWeight='700';
+    ganttHeader.appendChild(div);
+  }
+
+  ganttBody.innerHTML=''; ganttBody.style.width=totalWidth+'px';
+  const bodyH=tasks.length*ROW_H; ganttBody.style.height=bodyH+'px';
+  let d=new Date(PROJECT_START);
+  while(d<=PROJECT_END){
+    const off=dayOffset(d)*DAY_PX; const line=document.createElement('div');
+    line.className=(d.getDate()===1)?'grid-line-month':'grid-line-week';
+    line.style.left=off+'px'; line.style.height=bodyH+'px'; ganttBody.appendChild(line); d.setDate(d.getDate()+7);
+  }
+  for(let y=y0;y<=y1;y++) for(let m=0;m<12;m++){
+    const mStart=new Date(y,m,1); if(mStart<PROJECT_START||mStart>PROJECT_END) continue;
+    const off=dayOffset(mStart)*DAY_PX; const line=document.createElement('div');
+    line.className=(m===0)?'grid-line-year':'grid-line-month';
+    line.style.left=off+'px'; line.style.height=bodyH+'px'; ganttBody.appendChild(line);
+  }
+  if(today>=PROJECT_START&&today<=PROJECT_END){
+    const tl=document.createElement('div'); tl.className='today-line';
+    tl.style.left=(dayOffset(today)*DAY_PX)+'px'; tl.style.height=bodyH+'px'; ganttBody.appendChild(tl);
+  }
+
+  const idxById={}; tasks.forEach((t,i)=>{ idxById[t.id]=i; });
+
+  tbody.innerHTML='';
+  tasks.forEach((t,idx)=>{
+    const tr=document.createElement('tr');
+    if(t.summary) tr.className='summary-row';
+    if(t.level===1){ tr.style.background='#e9eff7'; }
+    const tdId=document.createElement('td'); tdId.textContent=t.id; tr.appendChild(tdId);
+    const tdName=document.createElement('td');
+    const indent=(t.level-1)*4; let nameHtml='&nbsp;'.repeat(indent);
+    const lvlColor=LEVEL_COLORS[t.level]||'#1B3A5C';
+    if(t.summary){ const expanded=!collapsedIds.has(t.id);
+      nameHtml+=`<span class="toggle-caret ${expanded?'expanded':''}" data-id="${t.id}" style="color:${lvlColor}">&#9654;</span>`; }
+    nameHtml+=escHtml(t.name); tdName.innerHTML=nameHtml;
+    if(t.summary) tdName.style.color=lvlColor;
+    tdName.style.maxWidth='300px'; tdName.style.overflow='hidden'; tdName.style.textOverflow='ellipsis';
+    tr.appendChild(tdName);
+    const tdSup=document.createElement('td'); tdSup.textContent=t.support||''; tdSup.style.color='#666'; tr.appendChild(tdSup);
+    const tdPct=document.createElement('td');
+    const barColor=t.pct>=100?'#27ae60':'#3498db';
+    tdPct.innerHTML=`<span style="font-size:0.68rem;margin-right:3px;">${t.pct}%</span><span class="mini-prog"><span class="mini-prog-fill" style="width:${t.pct}%;background:${barColor}"></span></span>`;
+    tr.appendChild(tdPct); tbody.appendChild(tr);
+
+    const grow=document.createElement('div'); grow.className='gantt-row'; grow.style.height=ROW_H+'px';
+    if(t.start&&t.finish){
+      const left=dayOffset(t.start)*DAY_PX, w=(daysBetween(t.start,t.finish)+1)*DAY_PX;
+      if(t.summary){
+        const bar=document.createElement('div'); bar.className='bar-summary';
+        bar.style.setProperty('--sumcolor', LEVEL_COLORS[t.level]||'#1B3A5C');
+        bar.style.left=left+'px'; bar.style.width=Math.max(w,6)+'px'; bar.dataset.idx=idx; grow.appendChild(bar);
+      }else{
+        let color='#3498db'; if(t.pct>=100) color='#27ae60'; else if(t.pct<100 && t.finish<today) color='#e74c3c';
+        const bar=document.createElement('div'); bar.className='bar';
+        bar.style.left=left+'px'; bar.style.width=Math.max(w,3)+'px'; bar.style.background=color; bar.dataset.idx=idx;
+        if(t.pct>0&&t.pct<100){ const prog=document.createElement('div'); prog.className='bar-progress';
+          prog.style.width=(100-t.pct)+'%'; prog.style.left=t.pct+'%'; bar.appendChild(prog); }
+        grow.appendChild(bar);
+      }
+    }
+    ganttBody.appendChild(grow);
+  });
+
+  // Dependency arrows (SVG overlay)
+  const NS='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(NS,'svg');
+  svg.setAttribute('width',totalWidth); svg.setAttribute('height',bodyH);
+  svg.style.cssText='position:absolute;top:0;left:0;pointer-events:none;z-index:6;overflow:visible;';
+  const defs=document.createElementNS(NS,'defs');
+  const marker=document.createElementNS(NS,'marker');
+  marker.setAttribute('id','arrowhead'); marker.setAttribute('markerWidth','7'); marker.setAttribute('markerHeight','7');
+  marker.setAttribute('refX','5'); marker.setAttribute('refY','2.5'); marker.setAttribute('orient','auto');
+  const mpath=document.createElementNS(NS,'path'); mpath.setAttribute('d','M0,0 L5,2.5 L0,5 Z'); mpath.setAttribute('fill','#8a97a8');
+  marker.appendChild(mpath); defs.appendChild(marker); svg.appendChild(defs);
+  tasks.forEach((t,idx)=>{
+    if(!t.preds || !(t.start&&t.finish)) return;
+    String(t.preds).split(',').forEach(ps=>{
+      const pid=parseInt(ps.trim()); if(!pid || !(pid in idxById)) return;
+      const p=tasks[idxById[pid]]; if(!(p.start&&p.finish)) return;
+      const x1=(dayOffset(p.finish)+1)*DAY_PX, y1=idxById[pid]*ROW_H+ROW_H/2;
+      const x2=dayOffset(t.start)*DAY_PX, y2=idx*ROW_H+ROW_H/2;
+      const el=Math.min(x1+8, x2-6);
+      const pts=`${x1},${y1} ${x1+8},${y1} ${x1+8},${y2} ${x2},${y2}`;
+      const pl=document.createElementNS(NS,'polyline');
+      pl.setAttribute('points',pts); pl.setAttribute('fill','none');
+      pl.setAttribute('stroke','#8a97a8'); pl.setAttribute('stroke-width','1.4');
+      pl.setAttribute('marker-end','url(#arrowhead)'); svg.appendChild(pl);
+    });
+  });
+  ganttBody.appendChild(svg);
+
+  tbody.querySelectorAll('.toggle-caret').forEach(c=>{
+    c.addEventListener('click',(e)=>{ e.stopPropagation(); const id=parseInt(c.dataset.id);
+      if(collapsedIds.has(id)) collapsedIds.delete(id); else collapsedIds.add(id); render(); });
+  });
+
+  const tooltip=document.getElementById('tooltip');
+  ganttBody.querySelectorAll('.bar, .bar-summary').forEach(bar=>{
+    bar.addEventListener('mouseenter',()=>{
+      const t=tasks[parseInt(bar.dataset.idx)]; if(!t) return;
+      let statusText=t.status||'';
+      if(!statusText){ if(t.pct>=100) statusText='Complete'; else if(t.pct<100&&t.finish&&t.finish<today) statusText='Overdue'; else if(t.pct>0) statusText='In Progress'; else statusText='Not Started'; }
+      const durWeeks=(t.start&&t.finish)?Math.max(1,Math.round(daysBetween(t.start,t.finish)/7)):null;
+      let html=`<div class="tt-title">${escHtml(t.name)}</div>`;
+      if(t.lead) html+=`<div class="tt-row"><span class="tt-label">Lead:</span>${escHtml(t.lead)}</div>`;
+      if(t.support) html+=`<div class="tt-row"><span class="tt-label">Support:</span>${escHtml(t.support)}</div>`;
+      html+=`<div class="tt-row"><span class="tt-label">Dates:</span>${fmtDate(t.start)} &ndash; ${fmtDate(t.finish)}</div>`;
+      if(durWeeks) html+=`<div class="tt-row"><span class="tt-label">Duration:</span>${durWeeks} weeks</div>`;
+      html+=`<div class="tt-row"><span class="tt-label">Progress:</span>${t.pct}%</div>`;
+      html+=`<div class="tt-row"><span class="tt-label">Status:</span>${escHtml(statusText)}</div>`;
+      if(t.preds) html+=`<div class="tt-row"><span class="tt-label">Depends On:</span>${escHtml(t.preds)}</div>`;
+      if(t.notes) html+=`<div class="tt-row"><span class="tt-label">Notes:</span>${escHtml(t.notes)}</div>`;
+      tooltip.innerHTML=html; tooltip.style.display='block';
+    });
+    bar.addEventListener('mousemove',(e)=>{ tooltip.style.left=(e.clientX+14)+'px'; tooltip.style.top=(e.clientY+14)+'px'; });
+    bar.addEventListener('mouseleave',()=>{ tooltip.style.display='none'; });
+  });
+}
+
+function escHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+// ── Auto-refresh ──
+function setupRefresh(){
+  if(refreshTimer) clearInterval(refreshTimer);
+  const ms=parseInt(document.getElementById('refreshInterval').value);
+  if(ms>0 && !PREVIEW && SHEET_URL) refreshTimer=setInterval(loadData,ms);
+}
+document.getElementById('refreshInterval').addEventListener('change',setupRefresh);
+document.getElementById('refreshBtn').addEventListener('click',loadData);
+document.getElementById('viewFilter').addEventListener('change',render);
+document.getElementById('leadFilter').addEventListener('change',render);
+
+// ── Init ──
+loadData().then(setupRefresh);
+
+</script>
+</body>
+</html>
