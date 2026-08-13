@@ -63,7 +63,9 @@
 
   /* Mini progress bar */
   .mini-prog { width:48px; height:10px; background:#e0e0e0; border-radius:5px; display:inline-block; vertical-align:middle; overflow:hidden; }
-  .mini-prog-fill { height:100%; border-radius:5px; }
+  /* display:block is load-bearing: the fill is a <span>, and an inline element
+     ignores width, which silently empties every bar in the % column. */
+  .mini-prog-fill { display:block; height:100%; border-radius:5px; }
 
   /* Gantt area */
   .gantt-area { position:relative; flex-grow:1; }
@@ -101,6 +103,12 @@
   }
   .bar-summary::before { left:0; }
   .bar-summary::after { right:0; }
+
+  /* Date labels (toggled by the Dates control; off by default) */
+  .bar-label {
+    position:absolute; top:6px; font-size:0.6rem; color:#5a6673; white-space:nowrap;
+    z-index:4; pointer-events:none;
+  }
 
   /* Caret */
   .toggle-caret {
@@ -161,11 +169,20 @@
       <option value="900000">15 min</option>
     </select>
   </label>
+  <label>Dates:
+    <select id="dateLabels">
+      <option value="off" selected>Off</option>
+      <option value="on">On bars</option>
+    </select>
+  </label>
   <button id="refreshBtn">Refresh Now</button>
+  <!-- Swatches must match the colors render() actually draws (see LEVEL_COLORS,
+       STATUS_COLORS, and the bar-color block) or the legend quietly lies. -->
   <div class="legend">
-    <div class="legend-item"><span class="legend-swatch" style="background:#2980b9"></span>In Progress</div>
-    <div class="legend-item"><span class="legend-swatch" style="background:#229954"></span>Complete</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#3498db"></span>In Progress</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#27ae60"></span>Complete</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#e74c3c"></span>Overdue</div>
+    <div class="legend-item"><span class="legend-swatch" style="background:#95a5a6"></span>On Hold</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#1B3A5C"></span>Lead</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#2d6a9f"></span>Project</div>
     <div class="legend-item"><span class="legend-swatch" style="background:#8a97a8;height:2px"></span>Dependency</div>
@@ -192,6 +209,13 @@ const PROJECT_END   = new Date(2028, 11, 31);
 const DAY_PX = 2.8;
 const ROW_H  = 26;
 const LEVEL_COLORS = {1:'#1B3A5C',2:'#2d6a9f',3:'#2d6a9f'}; // summary bar/label color by level
+// Bar colors the Status column can force, overriding the usual pct/date coloring.
+// Keys are lower-cased Status text; anything not listed keeps the computed color,
+// so adding a status to the Sheet never breaks the chart.
+const STATUS_COLORS = {
+  'on hold':'#95a5a6', 'hold':'#95a5a6', 'paused':'#95a5a6',
+  'cancelled':'#c8ccd0', 'canceled':'#c8ccd0'
+};
 const PREVIEW = false;             // production: fetch live sheet; embedded data is fallback only
 const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRO_ONneECIjz_KbYXw_6xyazauFt2uv_VMiWVdPP64CY4IaTCfylMaw1sA7xVFrS_nB3BvX5zx2RWJ/pub?gid=548050391&single=true&output=csv';  // live published CSV (Project Schedule tab)
 const PROXY = 'https://api.allorigins.win/raw?url=';
@@ -300,6 +324,8 @@ function parseDate(s){
 }
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function fmtDate(d){ if(!d) return ''; return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+// Compact form for on-bar labels: at 2.8px per day the full date will not fit.
+function fmtShort(d){ if(!d) return ''; return d.toLocaleDateString('en-US',{month:'numeric',day:'numeric'}); }
 function dayOffset(d){ return daysBetween(PROJECT_START,d); }
 const totalDays=daysBetween(PROJECT_START,PROJECT_END);
 const totalWidth=totalDays*DAY_PX;
@@ -314,20 +340,38 @@ function computeRollups(tasks){
   for(let i=tasks.length-1;i>=0;i--){
     const t=tasks[i];
     if(!t.summary) continue;
-    const starts=[],finishes=[],pcts=[];
+    const starts=[],finishes=[],leaves=[];
     for(let j=i+1;j<tasks.length;j++){
       if(tasks[j].level<=t.level) break;
       if(!tasks[j].summary){
         if(tasks[j].start) starts.push(tasks[j].start.getTime());
         if(tasks[j].finish) finishes.push(tasks[j].finish.getTime());
-        pcts.push(tasks[j].pct);
+        leaves.push(tasks[j]);
       }
     }
     if(starts.length && !t.start) t.start=new Date(Math.min.apply(null,starts));
     if(finishes.length && !t.finish) t.finish=new Date(Math.max.apply(null,finishes));
-    if(pcts.length && (t.pct===null||t.pct===undefined)) t.pct=Math.round(pcts.reduce((a,b)=>a+b,0)/pcts.length);
+    if(leaves.length && (t.pct===null||t.pct===undefined)) t.pct=weightedPct(leaves);
   }
 }
+// Duration-weighted rollup: a 12-week child moves its summary far more than a
+// 1-week child does. Children with no dates carry no weight, so half-filled rows
+// stop skewing the number. If NO child has dates there is nothing to weight by,
+// so we fall back to the plain average rather than reporting nothing.
+// A child with a blank % still counts, as 0 — same as before.
+function weightedPct(leaves){
+  let wSum=0, pSum=0;
+  for(const c of leaves){
+    const p=(c.pct==null)?0:c.pct;
+    const w=(c.start&&c.finish)?Math.max(1,daysBetween(c.start,c.finish)+1):0;
+    wSum+=w; pSum+=p*w;
+  }
+  if(wSum>0) return Math.round(pSum/wSum);
+  let flat=0; for(const c of leaves) flat+=(c.pct==null?0:c.pct);
+  return Math.round(flat/leaves.length);
+}
+// Status text from the Sheet wins over the computed color when it is one we know.
+function statusColor(t){ return STATUS_COLORS[String(t.status||'').trim().toLowerCase()] || null; }
 
 // ── Parse CSV Rows ──
 function parseSheetRows(rows){
@@ -426,6 +470,7 @@ function getFilteredTasks(){
 function render(){
   const tasks=getFilteredTasks();
   const today=new Date(); today.setHours(0,0,0,0);
+  const showDates=document.getElementById('dateLabels').value==='on';
   const tbody=document.getElementById('taskBody');
   const ganttBody=document.getElementById('ganttBody');
   const ganttHeader=document.getElementById('ganttHeader');
@@ -484,7 +529,7 @@ function render(){
     tr.appendChild(tdName);
     const tdSup=document.createElement('td'); tdSup.textContent=t.support||''; tdSup.style.color='#666'; tr.appendChild(tdSup);
     const tdPct=document.createElement('td');
-    const barColor=t.pct>=100?'#27ae60':'#3498db';
+    const barColor=statusColor(t)||(t.pct>=100?'#27ae60':'#3498db');
     tdPct.innerHTML=`<span style="font-size:0.68rem;margin-right:3px;">${t.pct}%</span><span class="mini-prog"><span class="mini-prog-fill" style="width:${t.pct}%;background:${barColor}"></span></span>`;
     tr.appendChild(tdPct); tbody.appendChild(tr);
 
@@ -497,11 +542,19 @@ function render(){
         bar.style.left=left+'px'; bar.style.width=Math.max(w,6)+'px'; bar.dataset.idx=idx; grow.appendChild(bar);
       }else{
         let color='#3498db'; if(t.pct>=100) color='#27ae60'; else if(t.pct<100 && t.finish<today) color='#e74c3c';
+        // An on-hold task is not "overdue" in any useful sense, so status wins last.
+        const sc=statusColor(t); if(sc) color=sc;
         const bar=document.createElement('div'); bar.className='bar';
         bar.style.left=left+'px'; bar.style.width=Math.max(w,3)+'px'; bar.style.background=color; bar.dataset.idx=idx;
         if(t.pct>0&&t.pct<100){ const prog=document.createElement('div'); prog.className='bar-progress';
           prog.style.width=(100-t.pct)+'%'; prog.style.left=t.pct+'%'; bar.appendChild(prog); }
         grow.appendChild(bar);
+      }
+      if(showDates){
+        const lab=document.createElement('div'); lab.className='bar-label';
+        lab.style.left=(left+Math.max(w,3)+6)+'px';
+        lab.textContent=fmtShort(t.start)+' – '+fmtShort(t.finish);
+        grow.appendChild(lab);
       }
     }
     ganttBody.appendChild(grow);
@@ -575,6 +628,7 @@ document.getElementById('refreshInterval').addEventListener('change',setupRefres
 document.getElementById('refreshBtn').addEventListener('click',loadData);
 document.getElementById('viewFilter').addEventListener('change',render);
 document.getElementById('leadFilter').addEventListener('change',render);
+document.getElementById('dateLabels').addEventListener('change',render);
 
 // ── Init ──
 loadData().then(setupRefresh);

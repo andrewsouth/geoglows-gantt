@@ -140,6 +140,12 @@ function protectComputedColumns() {
   for (var i = 0; i < existing.length; i++) {
     if (existing[i].getDescription() === TAG) existing[i].remove();
   }
-  var p = sh.getRange('I2:J1000').protect().setDescription(TAG);
+  // Cover only the rows that actually hold schedule data. The old fixed I2:J1000
+  // range meant edits and row moves anywhere in the ~1000-row block tripped the
+  // warning, including the empty rows far below the schedule. This is re-scoped
+  // on every formatInputSheet() run, so rows added later are still covered.
+  var last = sh.getLastRow();
+  if (last < 2) return;
+  var p = sh.getRange(2, COL.START, last - 1, 2).protect().setDescription(TAG);
   p.setWarningOnly(true);
 }
