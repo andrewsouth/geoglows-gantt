@@ -11,9 +11,10 @@ schedule as a live Gantt chart, published via GitHub Pages and fed by a Google S
 
 - `index.html` - the entire application. Vanilla HTML/CSS/JS in one file, no build step,
   no framework. The only external dependency is PapaParse, loaded from cdnjs at runtime.
-- (recommended to add) `apps-script/Code.gs` - a copy of the Apps Script that is bound to
-  the Google Sheet. It is NOT executed from this repo; it lives inside the Sheet. Keep a
-  copy here for version control. See "The Google Sheet side" below.
+- `apps-script/Code.gs` - a copy of the Apps Script that is bound to the Google Sheet.
+  It is NOT executed from this repo; it lives inside the Sheet. Edits here are only a
+  version-controlled record until someone pastes them into Extensions > Apps Script.
+  See "The Google Sheet side" below.
 
 There is no package.json, no bundler, and nothing to install. To preview, open
 `index.html` in a browser.
@@ -120,7 +121,13 @@ accordingly. Keep a copy of the script under `apps-script/` here for reference.
 
 - Confirm two ownership overlaps in the data: GRACE (Riley vs Norm) and Landing Page
   (Angelica vs Michael). These are data decisions in the Sheet, not code.
-- Optional features discussed: status-driven bar styling (e.g. "On hold" = grey);
-  an in-page legend/date toggle; a "resequence a section's IDs" Sheet button;
-  duration-weighted percent rollups; narrowing the Start/Finish protection so row
-  moves stop triggering the protection warning.
+- A "resequence a section's IDs" Sheet button is still unbuilt.
+
+Done (see the git history): status-driven bar styling via `STATUS_COLORS`; the Dates
+toggle and a corrected legend; duration-weighted percent rollups; and re-scoping the
+Start/Finish protection to the used rows.
+
+Note on the weighted rollups: a child with no dates carries no weight, so undated
+placeholder rows no longer drag a section toward 0%, and a single long task can
+dominate its section. That is what "duration-weighted" means, but it moved several
+lead percentages sharply.
