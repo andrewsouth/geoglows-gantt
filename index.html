@@ -336,39 +336,52 @@ function markSummaries(tasks){
     tasks[i].summary=(i+1<tasks.length && tasks[i+1].level>tasks[i].level);
   }
 }
+// Runs bottom-up, so by the time a row is processed every summary beneath it
+// already holds its own rolled-up percent. That makes the result cascade:
+// level 3 feeds level 2, which feeds level 1.
 function computeRollups(tasks){
   for(let i=tasks.length-1;i>=0;i--){
     const t=tasks[i];
     if(!t.summary) continue;
-    const starts=[],finishes=[],leaves=[];
+    // Immediate children only — the shallowest level found among the descendants.
+    // Reading the depth rather than assuming t.level+1 keeps this correct if the
+    // Sheet ever skips a level (a level 1 with level 3 rows straight under it).
+    let depth=Infinity;
     for(let j=i+1;j<tasks.length;j++){
       if(tasks[j].level<=t.level) break;
-      if(!tasks[j].summary){
-        if(tasks[j].start) starts.push(tasks[j].start.getTime());
-        if(tasks[j].finish) finishes.push(tasks[j].finish.getTime());
-        leaves.push(tasks[j]);
-      }
+      if(tasks[j].level<depth) depth=tasks[j].level;
+    }
+    const kids=[],starts=[],finishes=[];
+    for(let j=i+1;j<tasks.length;j++){
+      if(tasks[j].level<=t.level) break;
+      if(tasks[j].level!==depth) continue;
+      kids.push(tasks[j]);
+      if(tasks[j].start) starts.push(tasks[j].start.getTime());
+      if(tasks[j].finish) finishes.push(tasks[j].finish.getTime());
     }
     if(starts.length && !t.start) t.start=new Date(Math.min.apply(null,starts));
     if(finishes.length && !t.finish) t.finish=new Date(Math.max.apply(null,finishes));
-    if(leaves.length && (t.pct===null||t.pct===undefined)) t.pct=weightedPct(leaves);
+    // Children win, always. A percent typed on a row that was later broken into
+    // sub-tasks is stale by definition, so it is recomputed rather than kept.
+    // Only a row with nothing under it keeps what the Sheet says.
+    if(kids.length) t.pct=weightedPct(kids);
   }
 }
 // Duration-weighted rollup: a 12-week child moves its summary far more than a
 // 1-week child does. Children with no dates carry no weight, so half-filled rows
 // stop skewing the number. If NO child has dates there is nothing to weight by,
 // so we fall back to the plain average rather than reporting nothing.
-// A child with a blank % still counts, as 0 — same as before.
-function weightedPct(leaves){
+// A child with a blank % still counts, as 0.
+function weightedPct(kids){
   let wSum=0, pSum=0;
-  for(const c of leaves){
+  for(const c of kids){
     const p=(c.pct==null)?0:c.pct;
     const w=(c.start&&c.finish)?Math.max(1,daysBetween(c.start,c.finish)+1):0;
     wSum+=w; pSum+=p*w;
   }
   if(wSum>0) return Math.round(pSum/wSum);
-  let flat=0; for(const c of leaves) flat+=(c.pct==null?0:c.pct);
-  return Math.round(flat/leaves.length);
+  let flat=0; for(const c of kids) flat+=(c.pct==null?0:c.pct);
+  return Math.round(flat/kids.length);
 }
 // Status text from the Sheet wins over the computed color when it is one we know.
 function statusColor(t){ return STATUS_COLORS[String(t.status||'').trim().toLowerCase()] || null; }
