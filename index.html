@@ -359,11 +359,13 @@ function computeRollups(tasks){
       if(tasks[j].start) starts.push(tasks[j].start.getTime());
       if(tasks[j].finish) finishes.push(tasks[j].finish.getTime());
     }
-    if(starts.length && !t.start) t.start=new Date(Math.min.apply(null,starts));
-    if(finishes.length && !t.finish) t.finish=new Date(Math.max.apply(null,finishes));
-    // Children win, always. A percent typed on a row that was later broken into
-    // sub-tasks is stale by definition, so it is recomputed rather than kept.
-    // Only a row with nothing under it keeps what the Sheet says.
+    // Children win, always — for dates as well as percent. A value typed on a row
+    // that was later broken into sub-tasks is stale by definition, so it is
+    // recomputed rather than kept. Only a row with nothing under it keeps what the
+    // Sheet says; a parent whose children are all undated also keeps its own dates,
+    // since there is nothing to derive from.
+    if(starts.length) t.start=new Date(Math.min.apply(null,starts));
+    if(finishes.length) t.finish=new Date(Math.max.apply(null,finishes));
     if(kids.length) t.pct=weightedPct(kids);
   }
 }

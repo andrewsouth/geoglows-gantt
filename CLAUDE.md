@@ -70,9 +70,13 @@ NOT renamed. Headers read: `ID`, `Task Name`, `Level`, `Lead`, `Support`,
     which feeds level 1. Only a row with nothing under it keeps the Sheet's own value.
     A typed percent is therefore invisible on any row that has children - if a lead
     wants to assert a number, the row must have no sub-tasks.
-  - **Start/Finish: the row's own value still wins**, falling back to the children's
-    min/max. Dates were left this way deliberately; revisit if stale parent dates start
-    misplacing summary bars.
+  - **Start/Finish: the children win too.** A summary's dates are the min start and max
+    finish of its immediate children, and dates typed on that row are discarded. A parent
+    whose children are all undated keeps its own dates, since there is nothing to derive
+    from. Consequence to remember: a summary bar now spans only as far as its PLANNED
+    sub-tasks. If a long project has sub-tasks mapped out for just the first few months,
+    its bar ends there and the project looks shorter than it is. The fix is data, not
+    code - add or extend a sub-task.
 - `getFilteredTasks` - applies collapse state (multi-level) and the View / Lead filters.
 - `render` - builds the left task table and the right Gantt: month/year headers across
   2026-2028 (heavier line at each year), weekly/monthly gridlines, a red "today" line,
