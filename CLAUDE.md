@@ -62,8 +62,17 @@ NOT renamed. Headers read: `ID`, `Task Name`, `Level`, `Lead`, `Support`,
 ## Rendering logic (functions in index.html)
 
 - `markSummaries` - a row is a "summary" if the next row is a deeper level.
-- `computeRollups` - a summary's Start/Finish/percent are derived from its children,
-  UNLESS the row has its own values, in which case those win. Runs bottom-up.
+- `computeRollups` - runs bottom-up over the summary rows.
+  - **Percent: the children always win.** A summary's percent is the duration-weighted
+    average of its IMMEDIATE children, and any value typed on that row in the Sheet is
+    discarded. The reasoning: once a row is broken into sub-tasks, a number typed on the
+    parent is stale by definition. Because it runs bottom-up, level 3 feeds level 2,
+    which feeds level 1. Only a row with nothing under it keeps the Sheet's own value.
+    A typed percent is therefore invisible on any row that has children - if a lead
+    wants to assert a number, the row must have no sub-tasks.
+  - **Start/Finish: the row's own value still wins**, falling back to the children's
+    min/max. Dates were left this way deliberately; revisit if stale parent dates start
+    misplacing summary bars.
 - `getFilteredTasks` - applies collapse state (multi-level) and the View / Lead filters.
 - `render` - builds the left task table and the right Gantt: month/year headers across
   2026-2028 (heavier line at each year), weekly/monthly gridlines, a red "today" line,
